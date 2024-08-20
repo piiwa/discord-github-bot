@@ -42,8 +42,18 @@ class GitHubBot(commands.Bot):
     async def create_pr_thread(self, pr):
         logger.info(f"Creating thread for PR #{pr['number']}")
         channel = self.get_channel(self.github_channel_id)
-        thread = await channel.create_thread(name=f"PR #{pr['number']}: {pr['title']}", type=discord.ChannelType.public_thread)
-        await thread.send(f"New PR opened: {pr['html_url']}")
+
+        # Check if a thread for this PR already exists
+        existing_thread = discord.utils.get(channel.threads, name=f"PR #{pr['number']}: {pr['title']}")
+        if existing_thread:
+            logger.info(f"Thread for PR #{pr['number']} already exists")
+            return
+
+        thread = await channel.create_thread(
+            name=f"PR #{pr['number']}: {pr['title']}",
+            type=discord.ChannelType.public_thread
+        )
+        await thread.send(f"A new Pull Request is live here: {pr['html_url']} and created by {pr['user']['login']}.")
         logger.info(f"Thread created for PR #{pr['number']}")
 
 # Set up Discord bot
