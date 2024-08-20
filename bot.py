@@ -82,25 +82,21 @@ class GitHubBot(commands.Bot):
             logger.error(f"Unexpected error when creating thread for PR #{pr['number']}: {str(e)}", exc_info=True)
 
     async def handle_github_event(self, data):
-        logger.info("Handling GitHub event")
+        logger.info(f"Handling GitHub event: {json.dumps(data)[:500]}...")  # Log more of the event data
         try:
             if 'pull_request' in data:
                 if data['action'] == 'opened':
                     await self.handle_pull_request(data)
                 elif data['action'] in ['closed', 'merged']:
                     await self.handle_pr_closure(data['pull_request'])
-            elif 'issue' in data and 'pull_request' in data['issue']:
-                # This handles comments on PRs
-                await self.handle_pr_comment(data)
-            elif 'comment' in data and 'pull_request' in data:
-                # This handles review comments on PRs
-                await self.handle_pr_comment(data)
             elif 'review' in data:
                 await self.handle_pr_review(data)
+            elif 'comment' in data:
+                await self.handle_pr_comment(data)
             elif 'ref' in data:
                 await self.handle_push(data)
             else:
-                logger.warning(f"Received unknown event type: {json.dumps(data)[:200]}...")
+                logger.warning(f"Received unknown event type: {json.dumps(data)[:500]}...")
         except Exception as e:
             logger.error(f"Error handling GitHub event: {str(e)}", exc_info=True)
 
@@ -160,6 +156,21 @@ class GitHubBot(commands.Bot):
         except Exception as e:
             logger.error(f"Unexpected error when closing thread for PR #{pr['number']}: {str(e)}", exc_info=True)
 
+    async def handle_pr_review(self, data):
+        pr = data['pull_request']
+        review = data['review']
+        logger.info(f"Handling review on PR #{pr['number']}")
+
+        try:
+            channel = self.get_channel(self.github_channel_id)
+            thread = await self.get_thread(channel, pr)
+            if thread:
+                await self.add_review_to_thread(pr, review, thread)
+            else:
+                logger.warning(f"No thread found for review on PR #{pr['number']}")
+        except Exception as e:
+            logger.error(f"Error handling review on PR {pr['number']}: {str(e)}", exc_info=True)
+  
     async def handle_pr_comment(self, data):
         if 'issue' in data:
             pr_number = data['issue']['number']
@@ -180,38 +191,28 @@ class GitHubBot(commands.Bot):
         except Exception as e:
             logger.error(f"Error handling comment on PR {pr_number}: {str(e)}", exc_info=True)
 
-    async def handle_pr_review(self, data):
-        pr = data['pull_request']
-        review = data['review']
-        logger.info(f"Handling review on PR #{pr['number']}")
+    async def get_thread(self, channel, pr):
+        logger.info(f"Searching for thread for PR #{pr['number']}")
+        for thread in channel.threads:
+            if thread.name.startswith(f"PR #{pr['number']}:"):
+                logger.info(f"Found thread for PR #{pr['number']}: {thread.name}")
+                return thread
+        logger.warning(f"No thread found for PR #{pr['number']}")
+        return None
 
-        try:
-            await self.add_review_to_thread(pr, review)
-        except Exception as e:
-            logger.error(f"Error handling review on PR {pr['number']}: {str(e)}", exc_info=True)
+    async def add_review_to_thread(self, pr, review, thread):
+        logger.info(f"Adding review to thread for PR #{pr['number']}")
+        review_state = review['state'].capitalize()
+        review_body = review['body'] if review['body'] else "No comment provided."
+        message = f"New review by {review['user']['login']} - {review_state}:\n{review_body}"
+        await thread.send(message)
+        logger.info(f"Review added to thread for PR #{pr['number']}")
 
     async def add_comment_to_thread(self, pr, comment, thread):
         logger.info(f"Adding comment to thread for PR #{pr['number']}")
-        await thread.send(f"New comment by {comment['user']['login']}:\n{comment['body']}")
+        message = f"New comment by {comment['user']['login']}:\n{comment['body']}"
+        await thread.send(message)
         logger.info(f"Comment added to thread for PR #{pr['number']}")
-
-    async def add_review_to_thread(self, pr, review):
-        logger.info(f"Adding review to thread for PR #{pr['number']}")
-        channel = self.get_channel(self.github_channel_id)
-        thread = await self.get_or_create_thread(channel, pr)
-        if thread:
-            review_state = review['state'].capitalize()
-            review_body = review['body'] if review['body'] else "No comment provided."
-            await thread.send(f"New review by {review['user']['login']} - {review_state}:\n{review_body}")
-            logger.info(f"Review added to thread for PR #{pr['number']}")
-        else:
-            logger.warning(f"No thread found for review on PR #{pr['number']}")
-
-    async def get_thread(self, channel, pr):
-        for thread in channel.threads:
-            if thread.name.startswith(f"PR #{pr['number']}:"):
-                return thread
-        return None
 
     async def get_or_create_thread(self, channel, pr):
         thread = await self.get_thread(channel, pr)
@@ -240,7 +241,7 @@ async def on_ready():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
-    logger.info(f"Received webhook: {json.dumps(data)[:200]}...")  # Log first 200 chars to avoid huge logs
+    logger.info(f"Received webhook: {json.dumps(data)[:500]}...")  # Log more of the webhook data
     
     # Use run_coroutine_threadsafe to run the coroutine in the bot's event loop
     future = asyncio.run_coroutine_threadsafe(bot.handle_github_event(data), bot.loop)
