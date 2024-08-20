@@ -17,6 +17,11 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
+# Also log to console
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
 class GitHubBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -25,43 +30,59 @@ class GitHubBot(commands.Bot):
         self.github_api_base = "https://api.github.com"
 
     async def setup_hook(self):
+        logger.info("Bot is setting up...")
         await self.sync_repo()
 
     async def sync_repo(self):
-        logger.info("Syncing repository")
+        logger.info("Starting repository sync")
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{self.github_api_base}/repos/{self.github_repo}/pulls?state=open") as response:
+            url = f"{self.github_api_base}/repos/{self.github_repo}/pulls?state=open"
+            logger.info(f"Fetching open PRs from: {url}")
+            async with session.get(url) as response:
+                logger.info(f"API response status: {response.status}")
                 if response.status == 200:
                     prs = await response.json()
                     logger.info(f"Found {len(prs)} open PRs")
                     for pr in prs:
+                        logger.info(f"Processing PR #{pr['number']}: {pr['title']}")
                         await self.create_pr_thread(pr)
                 else:
-                    logger.error(f"Failed to fetch PRs. Status: {response.status}")
+                    logger.error(f"Failed to fetch PRs. Status: {response.status}, Response: {await response.text()}")
 
     async def create_pr_thread(self, pr):
-        logger.info(f"Creating thread for PR #{pr['number']}")
+        logger.info(f"Attempting to create thread for PR #{pr['number']}")
         channel = self.get_channel(self.github_channel_id)
+        if not channel:
+            logger.error(f"Unable to find channel with ID {self.github_channel_id}")
+            return
 
+        logger.info(f"Found channel: {channel.name} (ID: {channel.id})")
+        
         # Check if a thread for this PR already exists
         existing_thread = discord.utils.get(channel.threads, name=f"PR #{pr['number']}: {pr['title']}")
         if existing_thread:
             logger.info(f"Thread for PR #{pr['number']} already exists")
             return
 
-        thread = await channel.create_thread(
-            name=f"PR #{pr['number']}: {pr['title']}",
-            type=discord.ChannelType.public_thread
-        )
-        await thread.send(f"A new Pull Request is live here: {pr['html_url']} and created by {pr['user']['login']}.")
-        logger.info(f"Thread created for PR #{pr['number']}")
+        try:
+            thread = await channel.create_thread(
+                name=f"PR #{pr['number']}: {pr['title']}",
+                type=discord.ChannelType.public_thread
+            )
+            logger.info(f"Successfully created thread for PR #{pr['number']}")
+            await thread.send(f"A new Pull Request is live here: {pr['html_url']} and created by {pr['user']['login']}.")
+            logger.info(f"Sent initial message in thread for PR #{pr['number']}")
+        except discord.errors.Forbidden:
+            logger.error(f"Bot doesn't have permission to create threads in channel {channel.name}")
+        except discord.errors.HTTPException as e:
+            logger.error(f"HTTP exception when creating thread for PR #{pr['number']}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error when creating thread for PR #{pr['number']}: {str(e)}", exc_info=True)
 
-# Set up Discord bot
 intents = discord.Intents.default()
 intents.message_content = True
 bot = GitHubBot(command_prefix='!', intents=intents)
 
-# Set up Flask app for webhook
 app = Flask(__name__)
 
 @bot.event
@@ -72,10 +93,13 @@ async def on_ready():
 def webhook():
     data = request.json
     logger.info(f"Received webhook: {json.dumps(data)[:200]}...")  # Log first 200 chars to avoid huge logs
-    asyncio.run(handle_github_event(data))
+    
+    # Use create_task to run the coroutine in the background
+    asyncio.create_task(handle_github_event(data))
     return '', 200
 
 async def handle_github_event(data):
+    logger.info("Handling GitHub event")
     try:
         if 'pull_request' in data:
             await handle_pull_request(data)
