@@ -85,7 +85,14 @@ class GitHubBot(commands.Bot):
         logger.info("Handling GitHub event")
         try:
             if 'pull_request' in data:
-                await self.handle_pull_request(data)
+                if data['action'] == 'opened':
+                    await self.handle_pull_request(data)
+                elif data['action'] in ['closed', 'merged']:
+                    await self.handle_pr_closure(data['pull_request'])
+            elif 'comment' in data:
+                await self.handle_pr_comment(data)
+            elif 'review' in data:
+                await self.handle_pr_review(data)
             elif 'ref' in data:
                 await self.handle_push(data)
             else:
@@ -123,26 +130,87 @@ class GitHubBot(commands.Bot):
         except Exception as e:
             logger.error(f"Error handling push to {branch}: {str(e)}", exc_info=True)
 
-    async def close_pr_thread(self, pr):
+    async def handle_pr_closure(self, pr):
+        logger.info(f"Handling closure of PR #{pr['number']}")
+        try:
+            channel = self.get_channel(self.github_channel_id)
+            thread = await self.get_thread(channel, pr)
+            if thread:
+                await self.close_pr_thread(pr, thread)
+            else:
+                logger.warning(f"No thread found for closed PR #{pr['number']}")
+        except Exception as e:
+            logger.error(f"Error handling closure of PR {pr['number']}: {str(e)}", exc_info=True)
+
+    async def close_pr_thread(self, pr, thread):
         logger.info(f"Closing thread for PR #{pr['number']}")
-        channel = self.get_channel(self.github_channel_id)
-        for thread in channel.threads:
-            if thread.name.startswith(f"PR #{pr['number']}:"):
-                await thread.edit(archived=True)
-                await thread.send("This PR has been closed.")
-                logger.info(f"Thread closed for PR #{pr['number']}")
-                return
-        logger.warning(f"No thread found for PR #{pr['number']}")
+        try:
+            closure_message = f"PR #{pr['number']} has been {'merged' if pr['merged'] else 'closed'}."
+            await thread.send(closure_message)
+            await thread.edit(archived=True, locked=True, name=f"[CLOSED] {thread.name}")
+            logger.info(f"Thread closed for PR #{pr['number']}")
+        except discord.errors.Forbidden:
+            logger.error(f"Bot doesn't have permission to close thread for PR #{pr['number']}")
+        except discord.errors.HTTPException as e:
+            logger.error(f"HTTP exception when closing thread for PR #{pr['number']}: {str(e)}")
+        except Exception as e:
+            logger.error(f"Unexpected error when closing thread for PR #{pr['number']}: {str(e)}", exc_info=True)
+
+    async def handle_pr_comment(self, data):
+        pr = data['issue'] if 'issue' in data else data['pull_request']
+        comment = data['comment']
+        logger.info(f"Handling comment on PR #{pr['number']}")
+
+        try:
+            await self.add_comment_to_thread(pr, comment)
+        except Exception as e:
+            logger.error(f"Error handling comment on PR {pr['number']}: {str(e)}", exc_info=True)
+
+    async def handle_pr_review(self, data):
+        pr = data['pull_request']
+        review = data['review']
+        logger.info(f"Handling review on PR #{pr['number']}")
+
+        try:
+            await self.add_review_to_thread(pr, review)
+        except Exception as e:
+            logger.error(f"Error handling review on PR {pr['number']}: {str(e)}", exc_info=True)
 
     async def add_comment_to_thread(self, pr, comment):
         logger.info(f"Adding comment to thread for PR #{pr['number']}")
         channel = self.get_channel(self.github_channel_id)
+        thread = await self.get_or_create_thread(channel, pr)
+        if thread:
+            await thread.send(f"New comment by {comment['user']['login']}:\n{comment['body']}")
+            logger.info(f"Comment added to thread for PR #{pr['number']}")
+        else:
+            logger.warning(f"No thread found for comment on PR #{pr['number']}")
+
+    async def add_review_to_thread(self, pr, review):
+        logger.info(f"Adding review to thread for PR #{pr['number']}")
+        channel = self.get_channel(self.github_channel_id)
+        thread = await self.get_or_create_thread(channel, pr)
+        if thread:
+            review_state = review['state'].capitalize()
+            review_body = review['body'] if review['body'] else "No comment provided."
+            await thread.send(f"New review by {review['user']['login']} - {review_state}:\n{review_body}")
+            logger.info(f"Review added to thread for PR #{pr['number']}")
+        else:
+            logger.warning(f"No thread found for review on PR #{pr['number']}")
+
+    async def get_thread(self, channel, pr):
         for thread in channel.threads:
             if thread.name.startswith(f"PR #{pr['number']}:"):
-                await thread.send(f"New comment by {comment['user']['login']}: {comment['body']}")
-                logger.info(f"Comment added to thread for PR #{pr['number']}")
-                return
-        logger.warning(f"No thread found for comment on PR #{pr['number']}")
+                return thread
+        return None
+
+    async def get_or_create_thread(self, channel, pr):
+        thread = await self.get_thread(channel, pr)
+        if thread:
+            return thread
+        
+        # If thread doesn't exist, create a new one
+        return await self.create_pr_thread(pr)
 
     async def send_environment_update(self, branch):
         logger.info(f"Sending environment update for branch: {branch}")
