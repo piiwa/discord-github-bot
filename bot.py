@@ -49,36 +49,34 @@ class GitHubBot(commands.Bot):
 
             if 'pull_request' in data and 'action' in data:
                 if data['action'] == 'opened':
-                    await self.handle_pull_request(data)
+                    await self.handle_pull_request(data, repo_name)
                 elif data['action'] in ['closed', 'merged']:
-                    await self.handle_pr_closure(data['pull_request'])
+                    await self.handle_pr_closure(data['pull_request'], repo_name)
             elif 'review' in data:
-                await self.handle_pr_review(data)
+                await self.handle_pr_review(data, repo_name)
             elif 'comment' in data:
-                await self.handle_pr_comment(data)
+                await self.handle_pr_comment(data, repo_name)
             elif 'ref' in data:
-                await self.handle_push(data)
+                await self.handle_push(data, repo_name)
             else:
                 logger.warning(f"Received unknown event type from {repo_name}: {json.dumps(data)[:500]}...")
         except Exception as e:
             logger.error(f"Error handling GitHub event: {str(e)}", exc_info=True)
 
-    async def handle_pull_request(self, data):
+    async def handle_pull_request(self, data, repo_name):
         action = data['action']
         pr = data['pull_request']
-        logger.info(f"Handling PR {pr['number']} - Action: {action}")
+        logger.info(f"Handling PR {pr['number']} in {repo_name} - Action: {action}")
 
         try:
             if action == 'opened':
-                await self.create_pr_thread(pr)
+                await self.create_pr_thread(pr, repo_name)
             elif action == 'closed':
-                await self.close_pr_thread(pr)
-            elif action == 'created':
-                await self.add_comment_to_thread(pr, data['comment'])
+                await self.close_pr_thread(pr, repo_name)
             else:
                 logger.info(f"Unhandled PR action: {action}")
         except Exception as e:
-            logger.error(f"Error handling PR {pr['number']}: {str(e)}", exc_info=True)
+            logger.error(f"Error handling PR {pr['number']} in {repo_name}: {str(e)}", exc_info=True)
 
     async def handle_push(self, data):
         ref = data['ref']
@@ -93,31 +91,27 @@ class GitHubBot(commands.Bot):
         except Exception as e:
             logger.error(f"Error handling push to {branch}: {str(e)}", exc_info=True)
 
-    async def handle_pr_closure(self, pr):
-        logger.info(f"Handling closure of PR #{pr['number']}")
+    async def handle_pr_closure(self, pr, repo_name):
+        logger.info(f"Handling closure of PR #{pr['number']} in {repo_name}")
         try:
             channel = self.get_channel(self.github_channel_id)
-            thread = await self.get_thread(channel, pr)
+            thread = await self.get_thread(channel, pr, repo_name)
             if thread:
-                await self.close_pr_thread(pr, thread)
+                await self.close_pr_thread(pr, thread, repo_name)
             else:
-                logger.warning(f"No thread found for closed PR #{pr['number']}")
+                logger.warning(f"No thread found for closed PR #{pr['number']} in {repo_name}")
         except Exception as e:
-            logger.error(f"Error handling closure of PR {pr['number']}: {str(e)}", exc_info=True)
+            logger.error(f"Error handling closure of PR {pr['number']} in {repo_name}: {str(e)}", exc_info=True)
 
-    async def close_pr_thread(self, pr, thread):
-        logger.info(f"Closing thread for PR #{pr['number']}")
+    async def close_pr_thread(self, pr, thread, repo_name):
+        logger.info(f"Closing thread for PR #{pr['number']} in {repo_name}")
         try:
-            closure_message = f"PR #{pr['number']} has been {'merged' if pr['merged'] else 'closed'}."
+            closure_message = f"PR #{pr['number']} in {repo_name} has been {'merged' if pr['merged'] else 'closed'}."
             await thread.send(closure_message)
             await thread.edit(archived=True, locked=True, name=f"[CLOSED] {thread.name}")
-            logger.info(f"Thread closed for PR #{pr['number']}")
-        except discord.errors.Forbidden:
-            logger.error(f"Bot doesn't have permission to close thread for PR #{pr['number']}")
-        except discord.errors.HTTPException as e:
-            logger.error(f"HTTP exception when closing thread for PR #{pr['number']}: {str(e)}")
+            logger.info(f"Thread closed for PR #{pr['number']} in {repo_name}")
         except Exception as e:
-            logger.error(f"Unexpected error when closing thread for PR #{pr['number']}: {str(e)}", exc_info=True)
+            logger.error(f"Error closing thread for PR #{pr['number']} in {repo_name}: {str(e)}", exc_info=True)
 
     async def handle_pr_review(self, data):
         pr = data['pull_request']
