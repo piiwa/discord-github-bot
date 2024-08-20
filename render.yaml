@@ -7,3 +7,5 @@ services:
     envVars:
       - key: DISCORD_BOT_TOKEN
         sync: false
+      - key: REPO_CHANNEL_MAPPING
+        sync: false
