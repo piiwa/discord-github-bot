@@ -82,9 +82,9 @@ class GitHubBot(commands.Bot):
             logger.error(f"Unexpected error when creating thread for PR #{pr['number']}: {str(e)}", exc_info=True)
 
     async def handle_github_event(self, data):
-        logger.info(f"Handling GitHub event: {json.dumps(data)[:500]}...")  # Log more of the event data
+        logger.info(f"Handling GitHub event: {json.dumps(data)[:500]}...")
         try:
-            if 'pull_request' in data:
+            if 'pull_request' in data and 'action' in data:
                 if data['action'] == 'opened':
                     await self.handle_pull_request(data)
                 elif data['action'] in ['closed', 'merged']:
@@ -93,6 +93,8 @@ class GitHubBot(commands.Bot):
                 await self.handle_pr_review(data)
             elif 'comment' in data:
                 await self.handle_pr_comment(data)
+            elif 'pull_request_review' in data:
+                await self.handle_pr_review(data)
             elif 'ref' in data:
                 await self.handle_push(data)
             else:
@@ -170,15 +172,18 @@ class GitHubBot(commands.Bot):
                 logger.warning(f"No thread found for review on PR #{pr['number']}")
         except Exception as e:
             logger.error(f"Error handling review on PR {pr['number']}: {str(e)}", exc_info=True)
-  
+
     async def handle_pr_comment(self, data):
         if 'issue' in data:
             pr_number = data['issue']['number']
             comment = data['comment']
-        else:
+        elif 'pull_request' in data:
             pr_number = data['pull_request']['number']
             comment = data['comment']
-        
+        else:
+            logger.warning("Received comment event, but couldn't determine PR number")
+            return
+
         logger.info(f"Handling comment on PR #{pr_number}")
 
         try:
