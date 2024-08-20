@@ -34,7 +34,7 @@ class GitHubBot(commands.Bot):
         self.session = None
 
     async def setup_hook(self):
-        self.session = aiohttp.ClientSession()
+        self.session = aiohttp.ClientSession(headers={"Authorization": f"token {self.github_token}"})
         logger.info("Bot is setting up...")
         try:
             await self.sync_repos()
@@ -118,6 +118,11 @@ class GitHubBot(commands.Bot):
                 pr = await self.get_pr_info(repo_name, pr_number)
             else:
                 pr = data['pull_request']
+            
+            if not pr:
+                logger.error(f"Failed to get PR info for comment in {repo_name}")
+                return
+
             comment = data['comment']
             action = data['action']
 
@@ -165,7 +170,8 @@ class GitHubBot(commands.Bot):
         channel = self.get_channel(self.github_channel_id)
         thread = await self.get_or_create_thread(channel, pr, repo_name)
         if thread:
-            await thread.send(f"PR #{pr['number']} opened by {pr['user']['login']}\nTitle: {pr['title']}\nDescription: {pr['body'][:1000]}...")
+            pr_body = pr.get('body', 'No description provided.')
+            await thread.send(f"PR #{pr['number']} opened by {pr['user']['login']}\nTitle: {pr['title']}\nDescription: {pr_body[:1000]}...")
         else:
             logger.error(f"Failed to create thread for PR #{pr['number']} in {repo_name}")
 
@@ -218,8 +224,7 @@ class GitHubBot(commands.Bot):
 
     async def get_pr_info(self, repo_name, pr_number):
         url = f"{self.github_api_base}/repos/{repo_name}/pulls/{pr_number}"
-        headers = {"Authorization": f"token {self.github_token}"}
-        async with self.session.get(url, headers=headers) as response:
+        async with self.session.get(url) as response:
             if response.status == 200:
                 return await response.json()
             else:
