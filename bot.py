@@ -28,6 +28,7 @@ class GitHubBot(commands.Bot):
         self.github_channel_id = int(os.getenv('GITHUB_CHANNEL_ID'))
         self.github_repo = "piiwa/discord-github-bot"
         self.github_api_base = "https://api.github.com"
+        self.github_token = os.getenv('GITHUB_TOKEN')
 
     async def setup_hook(self):
         logger.info("Bot is setting up...")
@@ -35,7 +36,8 @@ class GitHubBot(commands.Bot):
 
     async def sync_repo(self):
         logger.info("Starting repository sync")
-        async with aiohttp.ClientSession() as session:
+        headers = {"Authorization": f"token {self.github_token}"} if self.github_token else {}
+        async with aiohttp.ClientSession(headers=headers) as session:
             url = f"{self.github_api_base}/repos/{self.github_repo}/pulls?state=open"
             logger.info(f"Fetching open PRs from: {url}")
             async with session.get(url) as response:
