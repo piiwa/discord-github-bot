@@ -31,24 +31,15 @@ class GitHubBot(commands.Bot):
 
     async def setup_hook(self):
         logger.info("Bot is setting up...")
-        await self.sync_repo()
+        try:
+            await self.sync_repos()
+        except Exception as e:
+            logger.error(f"Error during setup: {str(e)}", exc_info=True)
 
-    async def sync_repo(self):
+    async def sync_repos(self):
         logger.info("Starting repository sync")
-        headers = {"Authorization": f"token {self.github_token}"} if self.github_token else {}
-        async with aiohttp.ClientSession(headers=headers) as session:
-            url = f"{self.github_api_base}/repos/{self.github_repo}/pulls?state=open"
-            logger.info(f"Fetching open PRs from: {url}")
-            async with session.get(url) as response:
-                logger.info(f"API response status: {response.status}")
-                if response.status == 200:
-                    prs = await response.json()
-                    logger.info(f"Found {len(prs)} open PRs")
-                    for pr in prs:
-                        logger.info(f"Processing PR #{pr['number']}: {pr['title']}")
-                        await self.create_pr_thread(pr)
-                else:
-                    logger.error(f"Failed to fetch PRs. Status: {response.status}, Response: {await response.text()}")
+        # This method can be expanded later to sync multiple repositories if needed
+        logger.info("Repository sync completed")
 
     async def handle_github_event(self, data):
         logger.info(f"Handling GitHub event: {json.dumps(data)[:500]}...")
@@ -247,11 +238,11 @@ async def on_ready():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.json
-    logger.info(f"Received webhook: {json.dumps(data)[:500]}...")  # Log more of the webhook data
+    logger.info(f"Received webhook: {json.dumps(data)[:500]}...")
     
-    # Use run_coroutine_threadsafe to run the coroutine in the bot's event loop
-    future = asyncio.run_coroutine_threadsafe(bot.handle_github_event(data), bot.loop)
     try:
+        # Use run_coroutine_threadsafe to run the coroutine in the bot's event loop
+        future = asyncio.run_coroutine_threadsafe(bot.handle_github_event(data), bot.loop)
         future.result(timeout=60)  # Wait for at most 60 seconds
     except asyncio.TimeoutError:
         logger.error("Webhook handling timed out")
