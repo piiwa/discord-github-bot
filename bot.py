@@ -17,10 +17,6 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
-# Set up Discord bot
-intents = discord.Intents.default()
-intents.message_content = True
-
 class GitHubBot(commands.Bot):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -50,6 +46,9 @@ class GitHubBot(commands.Bot):
         await thread.send(f"New PR opened: {pr['html_url']}")
         logger.info(f"Thread created for PR #{pr['number']}")
 
+# Set up Discord bot
+intents = discord.Intents.default()
+intents.message_content = True
 bot = GitHubBot(command_prefix='!', intents=intents)
 
 # Set up Flask app for webhook
@@ -170,7 +169,7 @@ async def list_prs(ctx):
     else:
         await ctx.send("No open PRs found.")
 
-@bot.command(name='help')
+@bot.command(name='commands')
 async def custom_help(ctx):
     """Display custom help message with available commands."""
     help_text = """
@@ -178,7 +177,7 @@ async def custom_help(ctx):
     - !status: Check the status of the bot and its connections.
     - !sync: Manually trigger a sync of open PRs (Admin only).
     - !list_prs: List all open PRs.
-    - !help: Display this help message.
+    - !commands: Display this help message.
     """
     await ctx.send(help_text)
 
