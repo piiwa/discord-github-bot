@@ -89,7 +89,11 @@ class GitHubBot(commands.Bot):
                     await self.handle_pull_request(data)
                 elif data['action'] in ['closed', 'merged']:
                     await self.handle_pr_closure(data['pull_request'])
-            elif 'comment' in data:
+            elif 'issue' in data and 'pull_request' in data['issue']:
+                # This handles comments on PRs
+                await self.handle_pr_comment(data)
+            elif 'comment' in data and 'pull_request' in data:
+                # This handles review comments on PRs
                 await self.handle_pr_comment(data)
             elif 'review' in data:
                 await self.handle_pr_review(data)
@@ -157,14 +161,24 @@ class GitHubBot(commands.Bot):
             logger.error(f"Unexpected error when closing thread for PR #{pr['number']}: {str(e)}", exc_info=True)
 
     async def handle_pr_comment(self, data):
-        pr = data['issue'] if 'issue' in data else data['pull_request']
-        comment = data['comment']
-        logger.info(f"Handling comment on PR #{pr['number']}")
+        if 'issue' in data:
+            pr_number = data['issue']['number']
+            comment = data['comment']
+        else:
+            pr_number = data['pull_request']['number']
+            comment = data['comment']
+        
+        logger.info(f"Handling comment on PR #{pr_number}")
 
         try:
-            await self.add_comment_to_thread(pr, comment)
+            channel = self.get_channel(self.github_channel_id)
+            thread = await self.get_thread(channel, {'number': pr_number})
+            if thread:
+                await self.add_comment_to_thread({'number': pr_number}, comment, thread)
+            else:
+                logger.warning(f"No thread found for comment on PR #{pr_number}")
         except Exception as e:
-            logger.error(f"Error handling comment on PR {pr['number']}: {str(e)}", exc_info=True)
+            logger.error(f"Error handling comment on PR {pr_number}: {str(e)}", exc_info=True)
 
     async def handle_pr_review(self, data):
         pr = data['pull_request']
@@ -176,15 +190,10 @@ class GitHubBot(commands.Bot):
         except Exception as e:
             logger.error(f"Error handling review on PR {pr['number']}: {str(e)}", exc_info=True)
 
-    async def add_comment_to_thread(self, pr, comment):
+    async def add_comment_to_thread(self, pr, comment, thread):
         logger.info(f"Adding comment to thread for PR #{pr['number']}")
-        channel = self.get_channel(self.github_channel_id)
-        thread = await self.get_or_create_thread(channel, pr)
-        if thread:
-            await thread.send(f"New comment by {comment['user']['login']}:\n{comment['body']}")
-            logger.info(f"Comment added to thread for PR #{pr['number']}")
-        else:
-            logger.warning(f"No thread found for comment on PR #{pr['number']}")
+        await thread.send(f"New comment by {comment['user']['login']}:\n{comment['body']}")
+        logger.info(f"Comment added to thread for PR #{pr['number']}")
 
     async def add_review_to_thread(self, pr, review):
         logger.info(f"Adding review to thread for PR #{pr['number']}")
