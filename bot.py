@@ -81,6 +81,75 @@ class GitHubBot(commands.Bot):
         except Exception as e:
             logger.error(f"Unexpected error when creating thread for PR #{pr['number']}: {str(e)}", exc_info=True)
 
+    async def handle_github_event(self, data):
+        logger.info("Handling GitHub event")
+        try:
+            if 'pull_request' in data:
+                await self.handle_pull_request(data)
+            elif 'ref' in data:
+                await self.handle_push(data)
+            else:
+                logger.warning(f"Received unknown event type: {json.dumps(data)[:200]}...")
+        except Exception as e:
+            logger.error(f"Error handling GitHub event: {str(e)}", exc_info=True)
+
+    async def handle_pull_request(self, data):
+        action = data['action']
+        pr = data['pull_request']
+        logger.info(f"Handling PR {pr['number']} - Action: {action}")
+
+        try:
+            if action == 'opened':
+                await self.create_pr_thread(pr)
+            elif action == 'closed':
+                await self.close_pr_thread(pr)
+            elif action == 'created':
+                await self.add_comment_to_thread(pr, data['comment'])
+            else:
+                logger.info(f"Unhandled PR action: {action}")
+        except Exception as e:
+            logger.error(f"Error handling PR {pr['number']}: {str(e)}", exc_info=True)
+
+    async def handle_push(self, data):
+        ref = data['ref']
+        branch = ref.split('/')[-1]
+        logger.info(f"Handling push to branch: {branch}")
+
+        try:
+            if branch in ['main', 'test', 'develop']:
+                await self.send_environment_update(branch)
+            else:
+                logger.info(f"Push to non-environment branch: {branch}")
+        except Exception as e:
+            logger.error(f"Error handling push to {branch}: {str(e)}", exc_info=True)
+
+    async def close_pr_thread(self, pr):
+        logger.info(f"Closing thread for PR #{pr['number']}")
+        channel = self.get_channel(self.github_channel_id)
+        for thread in channel.threads:
+            if thread.name.startswith(f"PR #{pr['number']}:"):
+                await thread.edit(archived=True)
+                await thread.send("This PR has been closed.")
+                logger.info(f"Thread closed for PR #{pr['number']}")
+                return
+        logger.warning(f"No thread found for PR #{pr['number']}")
+
+    async def add_comment_to_thread(self, pr, comment):
+        logger.info(f"Adding comment to thread for PR #{pr['number']}")
+        channel = self.get_channel(self.github_channel_id)
+        for thread in channel.threads:
+            if thread.name.startswith(f"PR #{pr['number']}:"):
+                await thread.send(f"New comment by {comment['user']['login']}: {comment['body']}")
+                logger.info(f"Comment added to thread for PR #{pr['number']}")
+                return
+        logger.warning(f"No thread found for comment on PR #{pr['number']}")
+
+    async def send_environment_update(self, branch):
+        logger.info(f"Sending environment update for branch: {branch}")
+        channel = self.get_channel(self.github_channel_id)
+        await channel.send(f"Environment update: {branch} branch has been updated.")
+        logger.info(f"Environment update sent for branch: {branch}")
+
 intents = discord.Intents.default()
 intents.message_content = True
 bot = GitHubBot(command_prefix='!', intents=intents)
@@ -96,78 +165,16 @@ def webhook():
     data = request.json
     logger.info(f"Received webhook: {json.dumps(data)[:200]}...")  # Log first 200 chars to avoid huge logs
     
-    # Use create_task to run the coroutine in the background
-    asyncio.create_task(handle_github_event(data))
+    # Use run_coroutine_threadsafe to run the coroutine in the bot's event loop
+    future = asyncio.run_coroutine_threadsafe(bot.handle_github_event(data), bot.loop)
+    try:
+        future.result(timeout=60)  # Wait for at most 60 seconds
+    except asyncio.TimeoutError:
+        logger.error("Webhook handling timed out")
+    except Exception as e:
+        logger.error(f"Error in webhook handling: {str(e)}", exc_info=True)
+    
     return '', 200
-
-async def handle_github_event(data):
-    logger.info("Handling GitHub event")
-    try:
-        if 'pull_request' in data:
-            await handle_pull_request(data)
-        elif 'ref' in data:
-            await handle_push(data)
-        else:
-            logger.warning(f"Received unknown event type: {json.dumps(data)[:200]}...")
-    except Exception as e:
-        logger.error(f"Error handling GitHub event: {str(e)}", exc_info=True)
-
-async def handle_pull_request(data):
-    action = data['action']
-    pr = data['pull_request']
-    logger.info(f"Handling PR {pr['number']} - Action: {action}")
-
-    try:
-        if action == 'opened':
-            await bot.create_pr_thread(pr)
-        elif action == 'closed':
-            await close_pr_thread(pr)
-        elif action == 'created':
-            await add_comment_to_thread(pr, data['comment'])
-        else:
-            logger.info(f"Unhandled PR action: {action}")
-    except Exception as e:
-        logger.error(f"Error handling PR {pr['number']}: {str(e)}", exc_info=True)
-
-async def handle_push(data):
-    ref = data['ref']
-    branch = ref.split('/')[-1]
-    logger.info(f"Handling push to branch: {branch}")
-
-    try:
-        if branch in ['main', 'test', 'develop']:
-            await send_environment_update(branch)
-        else:
-            logger.info(f"Push to non-environment branch: {branch}")
-    except Exception as e:
-        logger.error(f"Error handling push to {branch}: {str(e)}", exc_info=True)
-
-async def close_pr_thread(pr):
-    logger.info(f"Closing thread for PR #{pr['number']}")
-    channel = bot.get_channel(bot.github_channel_id)
-    for thread in channel.threads:
-        if thread.name.startswith(f"PR #{pr['number']}:"):
-            await thread.edit(archived=True)
-            await thread.send("This PR has been closed.")
-            logger.info(f"Thread closed for PR #{pr['number']}")
-            return
-    logger.warning(f"No thread found for PR #{pr['number']}")
-
-async def add_comment_to_thread(pr, comment):
-    logger.info(f"Adding comment to thread for PR #{pr['number']}")
-    channel = bot.get_channel(bot.github_channel_id)
-    for thread in channel.threads:
-        if thread.name.startswith(f"PR #{pr['number']}:"):
-            await thread.send(f"New comment by {comment['user']['login']}: {comment['body']}")
-            logger.info(f"Comment added to thread for PR #{pr['number']}")
-            return
-    logger.warning(f"No thread found for comment on PR #{pr['number']}")
-
-async def send_environment_update(branch):
-    logger.info(f"Sending environment update for branch: {branch}")
-    channel = bot.get_channel(bot.github_channel_id)
-    await channel.send(f"Environment update: {branch} branch has been updated.")
-    logger.info(f"Environment update sent for branch: {branch}")
 
 @bot.command(name='status')
 async def status(ctx):
@@ -219,10 +226,11 @@ async def custom_help(ctx):
 
 if __name__ == '__main__':
     logger.info("Starting bot")
-    # Start the Flask app in a separate thread
+    
+    # Start the Discord bot in a separate thread
+    bot_thread = threading.Thread(target=bot.run, args=(os.getenv('DISCORD_BOT_TOKEN'),))
+    bot_thread.start()
+    
+    # Start the Flask app in the main thread
     port = int(os.environ.get('PORT', 5000))
-    threading.Thread(target=app.run, kwargs={'host': '0.0.0.0', 'port': port}).start()
-    logger.info(f"Flask app started on port {port}")
-
-    # Start the Discord bot
-    bot.run(os.getenv('DISCORD_BOT_TOKEN'))
+    app.run(host='0.0.0.0', port=port)
